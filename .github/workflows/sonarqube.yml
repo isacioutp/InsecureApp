@@ -39,9 +39,10 @@ jobs:
         env:
           SONAR_HOST_URL: http://localhost:9000
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        run: sonar-scanner \
-          -Dsonar.projectKey=mi_proyecto_seguro \
-          -Dsonar.sources=. \
-          -Dsonar.host.url=$SONAR_HOST_URL \
-          -Dsonar.token=$SONAR_TOKEN \
-          -Dsonar.python.version=3.10
+        run: |
+          sonar-scanner \
+            -Dsonar.projectKey=mi_proyecto_seguro \
+            -Dsonar.sources=. \
+            -Dsonar.host.url=$SONAR_HOST_URL \
+            -Dsonar.token=$SONAR_TOKEN \
+            -Dsonar.python.version=3.10
