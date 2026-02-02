@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Body
 import sqlite3
 import jwt
 import time
@@ -7,10 +7,19 @@ import random
 import logging
 import subprocess
 import requests
+
+# Extras para disparar más hallazgos en análisis estático
 import os
 import pickle
 import tempfile
+import base64
+import re
 
+# Opcional: puede no estar instalado, igual sirve para análisis estático
+try:
+    import yaml
+except Exception:
+    yaml = None
 
 app = FastAPI(title="Insecure Demo API (Sonar Alerts)")
 
@@ -27,6 +36,10 @@ JWT_ALG = "HS256"
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "admin123"
 
+# ✅ Hardcoded "cloud keys" (DUMMY, para que Sonar lo marque)
+AWS_ACCESS_KEY_ID = "AKIA1234567890EXAMPLE"
+AWS_SECRET_ACCESS_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+
 
 def db():
     conn = sqlite3.connect(DB_PATH)
@@ -37,7 +50,8 @@ def db():
 def init_db():
     conn = db()
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
     CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE,
@@ -45,7 +59,8 @@ def init_db():
         full_name TEXT,
         role TEXT
     )
-    """)
+    """
+    )
     conn.commit()
 
     # seed
@@ -95,7 +110,7 @@ def login(username: str, password: str):
     conn = db()
     cur = conn.cursor()
 
-    # ✅ SQLi (puede o no detectarlo Sonar, pero es inseguro igualmente)
+    # ✅ SQLi (inseguro; Sonar puede marcar)
     q = f"SELECT * FROM users WHERE username = '{username}' AND password = '{password}'"
     row = cur.execute(q).fetchone()
     conn.close()
@@ -172,30 +187,31 @@ def debug_insecure_token():
 def me(authorization: str | None = Header(default=None)):
     claims = decode_token(authorization)
     return {"claims": claims}
+
+
 # -------------------------------------------------------
 # 8) Deserialización insegura (pickle) - alerta típica
 # -------------------------------------------------------
 @app.post("/debug/pickle")
-def debug_pickle(payload_b64: str):
+def debug_pickle(payload_b64: str = Body(..., embed=True)):
     # ✅ Sonar: insecure deserialization
-    import base64
     data = base64.b64decode(payload_b64)
     obj = pickle.loads(data)  # nosec (intencional)
     return {"type": str(type(obj)), "repr": str(obj)[:200]}
 
 
 # -------------------------------------------------------
-# 9) Path Traversal (leer archivo arbitrario) - alerta típica
+# 9) Path Traversal / lectura arbitraria - alerta típica
 # -------------------------------------------------------
 @app.get("/debug/readfile")
 def debug_readfile(path: str):
-    # ✅ Sonar: path traversal / untrusted path
+    # ✅ Sonar: untrusted path / path traversal
     with open(path, "r", encoding="utf-8", errors="ignore") as f:  # nosec (intencional)
         return {"path": path, "preview": f.read(500)}
 
 
 # -------------------------------------------------------
-# 10) Variable de entorno usada para comando (inyección indirecta)
+# 10) os.system() - ejecución de comandos peligrosa
 # -------------------------------------------------------
 @app.get("/debug/os-system")
 def debug_os_system():
@@ -206,10 +222,10 @@ def debug_os_system():
 
 
 # -------------------------------------------------------
-# 11) Archivo temporal inseguro (race condition) - alerta típica
+# 11) Archivo temporal inseguro (mktemp) - alerta típica
 # -------------------------------------------------------
 @app.post("/debug/tempfile")
-def debug_tempfile(content: str):
+def debug_tempfile(content: str = Body(..., embed=True)):
     # ✅ Sonar: insecure temporary file (mktemp)
     name = tempfile.mktemp(prefix="demo-")  # nosec (intencional)
     with open(name, "w", encoding="utf-8") as f:
@@ -218,8 +234,46 @@ def debug_tempfile(content: str):
 
 
 # -------------------------------------------------------
-# 12) "Hardcoded secret" extra (para que lo marque seguro)
+# 12) YAML load inseguro (si PyYAML está instalado) - alerta típica
 # -------------------------------------------------------
-# ✅ Sonar: hardcoded credential/secret
-AWS_ACCESS_KEY_ID = "AKIA1234567890EXAMPLE"
-AWS_SECRET_ACCESS_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+@app.post("/debug/yaml")
+def debug_yaml(yaml_text: str = Body(..., embed=True)):
+    # ✅ Sonar: yaml.load can be unsafe (use safe_load)
+    if yaml is None:
+        return {"error": "PyYAML not installed, endpoint included for static analysis demo"}
+    obj = yaml.load(yaml_text, Loader=yaml.FullLoader)  # nosec (intencional)
+    return {"type": str(type(obj)), "repr": str(obj)[:200]}
+
+
+# -------------------------------------------------------
+# 13) Regex vulnerable a ReDoS - alerta típica
+# -------------------------------------------------------
+@app.get("/debug/regex")
+def debug_regex(user_input: str):
+    # ✅ Sonar: potentially catastrophic backtracking (ReDoS)
+    pattern = r"^(a+)+$"
+    matched = re.match(pattern, user_input) is not None
+    return {"pattern": pattern, "input_len": len(user_input), "matched": matched}
+
+
+# -------------------------------------------------------
+# 14) Comparación insegura de secretos (timing attack) - alerta típica
+# -------------------------------------------------------
+@app.get("/debug/compare")
+def debug_compare(secret: str):
+    # ✅ Sonar: non-constant time comparison for secrets
+    if secret == JWT_SECRET:
+        return {"ok": True}
+    return {"ok": False}
+
+
+# -------------------------------------------------------
+# 15) Ejemplo de envío de credenciales por HTTP (sin TLS) - alerta típica
+# -------------------------------------------------------
+@app.post("/debug/http-basic")
+def debug_http_basic(username: str = Body(...), password: str = Body(...)):
+    # ✅ Sonar: hardcoded http / insecure transport (depende del profile, pero útil)
+    # Solo demostración: NO usar en real.
+    url = "http://example.com/login"
+    # En la práctica, esto expondría credenciales si alguien intercepta.
+    return {"warning": "Demo only", "url": url, "username": username, "password_len": len(password)}
