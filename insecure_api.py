@@ -7,6 +7,10 @@ import random
 import logging
 import subprocess
 import requests
+import os
+import pickle
+import tempfile
+
 
 app = FastAPI(title="Insecure Demo API (Sonar Alerts)")
 
@@ -168,3 +172,54 @@ def debug_insecure_token():
 def me(authorization: str | None = Header(default=None)):
     claims = decode_token(authorization)
     return {"claims": claims}
+# -------------------------------------------------------
+# 8) Deserialización insegura (pickle) - alerta típica
+# -------------------------------------------------------
+@app.post("/debug/pickle")
+def debug_pickle(payload_b64: str):
+    # ✅ Sonar: insecure deserialization
+    import base64
+    data = base64.b64decode(payload_b64)
+    obj = pickle.loads(data)  # nosec (intencional)
+    return {"type": str(type(obj)), "repr": str(obj)[:200]}
+
+
+# -------------------------------------------------------
+# 9) Path Traversal (leer archivo arbitrario) - alerta típica
+# -------------------------------------------------------
+@app.get("/debug/readfile")
+def debug_readfile(path: str):
+    # ✅ Sonar: path traversal / untrusted path
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:  # nosec (intencional)
+        return {"path": path, "preview": f.read(500)}
+
+
+# -------------------------------------------------------
+# 10) Variable de entorno usada para comando (inyección indirecta)
+# -------------------------------------------------------
+@app.get("/debug/os-system")
+def debug_os_system():
+    # ✅ Sonar: os.system is dangerous
+    cmd = os.environ.get("CMD", "id")
+    rc = os.system(cmd)  # nosec (intencional)
+    return {"cmd": cmd, "returncode": rc}
+
+
+# -------------------------------------------------------
+# 11) Archivo temporal inseguro (race condition) - alerta típica
+# -------------------------------------------------------
+@app.post("/debug/tempfile")
+def debug_tempfile(content: str):
+    # ✅ Sonar: insecure temporary file (mktemp)
+    name = tempfile.mktemp(prefix="demo-")  # nosec (intencional)
+    with open(name, "w", encoding="utf-8") as f:
+        f.write(content)
+    return {"temp_file": name}
+
+
+# -------------------------------------------------------
+# 12) "Hardcoded secret" extra (para que lo marque seguro)
+# -------------------------------------------------------
+# ✅ Sonar: hardcoded credential/secret
+AWS_ACCESS_KEY_ID = "AKIA1234567890EXAMPLE"
+AWS_SECRET_ACCESS_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
