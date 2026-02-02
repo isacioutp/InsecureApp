@@ -2,14 +2,17 @@ name: SonarQube Analysis
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
 
 jobs:
   sonarQube:
     name: SonarQube Analysis
     runs-on: self-hosted
+
+    # ✅ Esto habilita Environment Secrets
+    environment: sonarqube
 
     steps:
       - name: Checkout code
@@ -38,12 +41,14 @@ jobs:
 
       - name: Run SonarScanner
         env:
-          SONAR_HOST_URL: http://localhost:9000
+          # ✅ Recomendado: muévelo a Environment Secret o Variable
+          # Si lo pones como secret de environment: SONAR_HOST_URL
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: |
           sonar-scanner \
             -Dsonar.projectKey=mi_proyecto_seguro \
             -Dsonar.sources=. \
-            -Dsonar.host.url=$SONAR_HOST_URL \
-            -Dsonar.token=sqp_4ba13d6278efe09d128896a7928e7a0c32730c9a \
+            -Dsonar.host.url="$SONAR_HOST_URL" \
+            -Dsonar.token="$SONAR_TOKEN" \
             -Dsonar.python.version=3.10
