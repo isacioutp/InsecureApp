@@ -20,7 +20,7 @@ try:
     import yaml
 except Exception:
     yaml = None
-
+#comentario
 app = FastAPI(title="Insecure Demo API (Sonar Alerts)")
 
 logging.basicConfig(level=logging.INFO)
