@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Header, HTTPException, Body
+from fastapi import FastAPI, Header, HTTPException
 import sqlite3
 import jwt
 import time
@@ -8,19 +8,7 @@ import logging
 import subprocess
 import requests
 
-# Extras para disparar más hallazgos en análisis estático
-import os
-import pickle
-import tempfile
-import base64
-import re
 
-# Opcional: puede no estar instalado, igual sirve para análisis estático
-try:
-    import yaml
-except Exception:
-    yaml = None
-#comentario
 app = FastAPI(title="Insecure Demo API (Sonar Alerts)")
 
 logging.basicConfig(level=logging.INFO)
@@ -36,10 +24,6 @@ JWT_ALG = "HS256"
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "admin123"
 
-# ✅ Hardcoded "cloud keys" (DUMMY, para que Sonar lo marque)
-AWS_ACCESS_KEY_ID = "AKIA1234567890EXAMPLE"
-AWS_SECRET_ACCESS_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-
 
 def db():
     conn = sqlite3.connect(DB_PATH)
@@ -50,8 +34,7 @@ def db():
 def init_db():
     conn = db()
     cur = conn.cursor()
-    cur.execute(
-        """
+    cur.execute("""
     CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE,
@@ -59,8 +42,7 @@ def init_db():
         full_name TEXT,
         role TEXT
     )
-    """
-    )
+    """)
     conn.commit()
 
     # seed
@@ -110,7 +92,7 @@ def login(username: str, password: str):
     conn = db()
     cur = conn.cursor()
 
-    # ✅ SQLi (inseguro; Sonar puede marcar)
+    # ✅ SQLi (puede o no detectarlo Sonar, pero es inseguro igualmente)
     q = f"SELECT * FROM users WHERE username = '{username}' AND password = '{password}'"
     row = cur.execute(q).fetchone()
     conn.close()
@@ -187,93 +169,3 @@ def debug_insecure_token():
 def me(authorization: str | None = Header(default=None)):
     claims = decode_token(authorization)
     return {"claims": claims}
-
-
-# -------------------------------------------------------
-# 8) Deserialización insegura (pickle) - alerta típica
-# -------------------------------------------------------
-@app.post("/debug/pickle")
-def debug_pickle(payload_b64: str = Body(..., embed=True)):
-    # ✅ Sonar: insecure deserialization
-    data = base64.b64decode(payload_b64)
-    obj = pickle.loads(data)  # nosec (intencional)
-    return {"type": str(type(obj)), "repr": str(obj)[:200]}
-
-
-# -------------------------------------------------------
-# 9) Path Traversal / lectura arbitraria - alerta típica
-# -------------------------------------------------------
-@app.get("/debug/readfile")
-def debug_readfile(path: str):
-    # ✅ Sonar: untrusted path / path traversal
-    with open(path, "r", encoding="utf-8", errors="ignore") as f:  # nosec (intencional)
-        return {"path": path, "preview": f.read(500)}
-
-
-# -------------------------------------------------------
-# 10) os.system() - ejecución de comandos peligrosa
-# -------------------------------------------------------
-@app.get("/debug/os-system")
-def debug_os_system():
-    # ✅ Sonar: os.system is dangerous
-    cmd = os.environ.get("CMD", "id")
-    rc = os.system(cmd)  # nosec (intencional)
-    return {"cmd": cmd, "returncode": rc}
-
-
-# -------------------------------------------------------
-# 11) Archivo temporal inseguro (mktemp) - alerta típica
-# -------------------------------------------------------
-@app.post("/debug/tempfile")
-def debug_tempfile(content: str = Body(..., embed=True)):
-    # ✅ Sonar: insecure temporary file (mktemp)
-    name = tempfile.mktemp(prefix="demo-")  # nosec (intencional)
-    with open(name, "w", encoding="utf-8") as f:
-        f.write(content)
-    return {"temp_file": name}
-
-
-# -------------------------------------------------------
-# 12) YAML load inseguro (si PyYAML está instalado) - alerta típica
-# -------------------------------------------------------
-@app.post("/debug/yaml")
-def debug_yaml(yaml_text: str = Body(..., embed=True)):
-    # ✅ Sonar: yaml.load can be unsafe (use safe_load)
-    if yaml is None:
-        return {"error": "PyYAML not installed, endpoint included for static analysis demo"}
-    obj = yaml.load(yaml_text, Loader=yaml.FullLoader)  # nosec (intencional)
-    return {"type": str(type(obj)), "repr": str(obj)[:200]}
-
-
-# -------------------------------------------------------
-# 13) Regex vulnerable a ReDoS - alerta típica
-# -------------------------------------------------------
-@app.get("/debug/regex")
-def debug_regex(user_input: str):
-    # ✅ Sonar: potentially catastrophic backtracking (ReDoS)
-    pattern = r"^(a+)+$"
-    matched = re.match(pattern, user_input) is not None
-    return {"pattern": pattern, "input_len": len(user_input), "matched": matched}
-
-
-# -------------------------------------------------------
-# 14) Comparación insegura de secretos (timing attack) - alerta típica
-# -------------------------------------------------------
-@app.get("/debug/compare")
-def debug_compare(secret: str):
-    # ✅ Sonar: non-constant time comparison for secrets
-    if secret == JWT_SECRET:
-        return {"ok": True}
-    return {"ok": False}
-
-
-# -------------------------------------------------------
-# 15) Ejemplo de envío de credenciales por HTTP (sin TLS) - alerta típica
-# -------------------------------------------------------
-@app.post("/debug/http-basic")
-def debug_http_basic(username: str = Body(...), password: str = Body(...)):
-    # ✅ Sonar: hardcoded http / insecure transport (depende del profile, pero útil)
-    # Solo demostración: NO usar en real.
-    url = "http://example.com/login"
-    # En la práctica, esto expondría credenciales si alguien intercepta.
-    return {"warning": "Demo only", "url": url, "username": username, "password_len": len(password)}
